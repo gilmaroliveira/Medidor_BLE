@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Medidor BLE</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --txt:#e2e8f0; --mut:#94a3b8; --ok:#34d399; --warn:#fbbf24; --err:#f87171; --acc:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family: system-ui, sans-serif;
+         padding: max(16px, env(safe-area-inset-top)) 16px 24px; max-width:720px; margin-inline:auto; }
+  h1 { font-size: 1.15rem; margin: 0 0 4px; }
+  h2 { font-size: .95rem; margin: 20px 0 8px; color:var(--mut); font-weight:600; }
+  #status { color: var(--mut); font-size: .9rem; margin-bottom: 8px; }
+  #status.ok { color: var(--ok); } #status.err { color: var(--err); }
+  #eq { margin-bottom: 12px; }
+  #pin { width:100%; padding:14px; font-size:1rem; border:1px solid #334155; border-radius:12px;
+         background:var(--card); color:var(--txt); margin-bottom:10px; }
+  button { width:100%; padding:14px; font-size:1rem; border:0; border-radius:12px;
+           background:var(--acc); color:#06222f; font-weight:600; margin-bottom:16px; }
+  button.sec { background:#334155; color:var(--txt); margin-top:12px; margin-bottom:0; padding:10px; font-size:.9rem; }
+  button.lnk { width:auto; background:none; color:var(--acc); padding:0; margin:0; font-size:inherit;
+               text-decoration:underline; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; }
+  .lbl { color:var(--mut); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
+  .val { font-size:2rem; font-weight:700; margin-top:4px; font-variant-numeric: tabular-nums; }
+  .val small { font-size:1rem; color:var(--mut); font-weight:500; }
+  .val.warn { color:var(--warn); } .val.err { color:var(--err); }
+  .stale .val { opacity:.35; }
+  #per { width:100%; margin:12px 0 2px; accent-color:var(--acc); }
+  #per:disabled { opacity:.4; }
+  .hint { color:var(--mut); font-size:.8rem; }
+  canvas { width:100%; height:200px; display:block; margin-top:8px; }
+  .legenda { display:flex; gap:14px; flex-wrap:wrap; font-size:.8rem; color:var(--mut); margin-top:6px; }
+  .legenda span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:50%;
+                          background:var(--c); margin-right:6px; vertical-align:middle; }
+</style>
+</head>
+<body>
+<h1>Medidor BLE</h1>
+<div id="status">Desconectado</div>
+<div id="eq" class="hint" hidden>Equipamento: <b id="eqNome"></b> · <button class="lnk" id="trocar">Trocar equipamento</button></div>
+<input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN do equipamento">
+<button id="btn">Conectar</button>
+
+<div class="grid" id="grid">
+  <div class="card"><div class="lbl">Temp 1</div><div class="val" id="t1">--</div></div>
+  <div class="card"><div class="lbl">Temp 2</div><div class="val" id="t2">--</div></div>
+  <div class="card"><div class="lbl">Temp 3</div><div class="val" id="t3">--</div></div>
+  <div class="card"><div class="lbl">Nível</div><div class="val" id="nivel">--</div></div>
+  <div class="card"><div class="lbl">Tensão</div><div class="val" id="tensao">--</div></div>
+  <div class="card"><div class="lbl">Corrente</div><div class="val" id="corr">--</div></div>
+</div>
+
+<h2>Gráficos em tempo real</h2>
+<div class="card">
+  <div class="lbl">Intervalo de leitura: <b id="perLbl">1 s</b></div>
+  <input id="per" type="range" min="1" max="30" step="1" value="1" disabled>
+  <div class="hint">Ajusta o ESP32 (1 a 30 s). Disponível depois de conectar.</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <div class="lbl">Temperaturas (°C)</div>
+  <canvas id="cvT"></canvas>
+  <div class="legenda">
+    <span style="--c:#38bdf8">T1</span><span style="--c:#fbbf24">T2</span><span style="--c:#f472b6">T3</span>
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <div class="lbl">Tensão (V, esquerda) e corrente (A, direita)</div>
+  <canvas id="cvE"></canvas>
+  <div class="legenda">
+    <span style="--c:#34d399">Tensão</span><span style="--c:#f87171">Corrente</span>
+  </div>
+  <button class="sec" id="limpar">Limpar gráficos</button>
+</div>
+
+<script>
+const SVC = '7a1c0001-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHT = '7a1c0002-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHE = '7a1c0003-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHA = '7a1c0004-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHC = '7a1c0005-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const TEMP_ALERTA = 80;          // °C: valor fica amarelo acima disso
+const MAX_PTS = 300;             // pontos guardados por série
+
+const $ = id => document.getElementById(id);
+const dec = new TextDecoder();
+const enc = new TextEncoder();
+let device = null, ultimoDado = 0, chCfg = null, periodoS = 1, geracao = 0;
+
+function lerSalvo(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } }
+function gravaSalvo(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (_) {} }
+
+$('pin').value = lerSalvo('pin');
+
+function status(txt, cls='') { const s = $('status'); s.textContent = txt; s.className = cls; }
+
+function mostraEq() {
+  const n = lerSalvo('nome');
+  $('eq').hidden = !n;
+  $('eqNome').textContent = n;
+}
+mostraEq();
+
+// ---------------------------------------------------------------- Dados / gráficos
+const serT = [
+  { cor:'#38bdf8', dados:[] }, { cor:'#fbbf24', dados:[] }, { cor:'#f472b6', dados:[] }
+];
+const serV = { cor:'#34d399', dados:[] };
+const serI = { cor:'#f87171', dados:[] };
+
+function empurra(serie, t, v) {
+  serie.dados.push({ t, v });
+  if (serie.dados.length > MAX_PTS) serie.dados.shift();
+}
+
+function numero(txt) { const v = parseFloat(txt); return isNaN(v) ? NaN : v; }
+
+function passoBonito(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+}
+
+// Escala automática: devolve {lo, hi, passo}
+function escala(series, spanMin) {
+  let mn = Infinity, mx = -Infinity;
+  for (const s of series) for (const p of s.dados) if (!isNaN(p.v)) { mn = Math.min(mn, p.v); mx = Math.max(mx, p.v); }
+  if (!isFinite(mn)) { mn = 0; mx = spanMin; }
+  let lo = mn, hi = mx;
+  if (hi - lo < spanMin) {
+    const c = (hi + lo) / 2;
+    lo = c - spanMin / 2; hi = c + spanMin / 2;
+    if (mn >= 0 && lo < 0) { hi -= lo; lo = 0; }
+  }
+  const passo = passoBonito((hi - lo) / 4);
+  lo = Math.floor(lo / passo) * passo;
+  hi = Math.ceil(hi / passo) * passo;
+  if (mn >= 0 && lo < 0) lo = 0;
+  return { lo, hi, passo };
+}
+
+function fmtDur(s) {
+  if (s < 90) return '-' + Math.round(s) + ' s';
+  if (s < 5400) return '-' + Math.round(s / 60) + ' min';
+  return '-' + (s / 3600).toFixed(1) + ' h';
+}
+
+function desenha(canvas, esq, dir, spanEsq, spanDir) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  }
+  const g = canvas.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+
+  const padL = 40, padR = dir.length ? 40 : 10, padT = 8, padB = 22;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  g.font = '11px system-ui, sans-serif';
+
+  const todas = esq.concat(dir);
+  let t0 = Infinity, t1 = -Infinity;
+  for (const s of todas) for (const p of s.dados) { t0 = Math.min(t0, p.t); t1 = Math.max(t1, p.t); }
+  if (!isFinite(t0)) {
+    g.fillStyle = '#94a3b8'; g.textAlign = 'center';
+    g.fillText('Sem dados', w / 2, h / 2);
+    return;
+  }
+  if (t1 - t0 < 2000) t1 = t0 + 2000;
+
+  const eE = escala(esq, spanEsq);
+  const eD = dir.length ? escala(dir, spanDir) : null;
+  const X = t => padL + (t - t0) / (t1 - t0) * pw;
+  const Y = (v, e) => padT + (1 - (v - e.lo) / (e.hi - e.lo)) * ph;
+
+  // grade + rótulos do eixo esquerdo
+  g.lineWidth = 1; g.strokeStyle = '#334155'; g.fillStyle = '#94a3b8';
+  g.textAlign = 'right';
+  for (let v = eE.lo; v <= eE.hi + 1e-9; v += eE.passo) {
+    const y = Y(v, eE);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(w - padR, y); g.stroke();
+    g.fillStyle = esq.length === 1 ? esq[0].cor : '#94a3b8';
+    g.fillText(+v.toFixed(2), padL - 5, y + 4);
+  }
+  if (eD) {
+    g.textAlign = 'left'; g.fillStyle = dir[0].cor;
+    for (let v = eD.lo; v <= eD.hi + 1e-9; v += eD.passo) {
+      g.fillText(+v.toFixed(2), w - padR + 5, Y(v, eD) + 4);
+    }
+  }
+  // eixo do tempo
+  g.fillStyle = '#94a3b8';
+  g.textAlign = 'left';  g.fillText(fmtDur((t1 - t0) / 1000), padL, h - 6);
+  g.textAlign = 'right'; g.fillText('agora', w - padR, h - 6);
+
+  // linhas (valores inválidos abrem uma lacuna)
+  const traca = (s, e) => {
+    g.strokeStyle = s.cor; g.lineWidth = 2; g.lineJoin = 'round';
+    g.beginPath();
+    let aberto = false;
+    for (const p of s.dados) {
+      if (isNaN(p.v)) { aberto = false; continue; }
+      const x = X(p.t), y = Y(p.v, e);
+      if (!aberto) { g.moveTo(x, y); aberto = true; } else g.lineTo(x, y);
+    }
+    g.stroke();
+    const u = s.dados[s.dados.length - 1];
+    if (u && !isNaN(u.v)) { g.fillStyle = s.cor; g.beginPath(); g.arc(X(u.t), Y(u.v, e), 3, 0, 7); g.fill(); }
+  };
+  esq.forEach(s => traca(s, eE));
+  if (eD) dir.forEach(s => traca(s, eD));
+}
+
+let desenhoAgendado = false;
+function redesenha() {
+  if (desenhoAgendado) return;
+  desenhoAgendado = true;
+  requestAnimationFrame(() => {
+    desenhoAgendado = false;
+    desenha($('cvT'), serT, [], 10, 0);
+    desenha($('cvE'), [serV], [serI], 1, 5);
+  });
+}
+window.addEventListener('resize', redesenha);
+
+$('limpar').addEventListener('click', () => {
+  serT.forEach(s => s.dados.length = 0); serV.dados.length = 0; serI.dados.length = 0;
+  redesenha();
+});
+
+// ---------------------------------------------------------------- Valores atuais
+function mostraTemp(id, txt) {
+  const el = $(id);
+  if (txt === 'ERR' || txt === undefined || txt === '') {
+    el.className = 'val err'; el.textContent = 'ERR'; return;
+  }
+  const v = parseFloat(txt);
+  el.className = 'val' + (v >= TEMP_ALERTA ? ' warn' : '');
+  el.innerHTML = v.toFixed(1) + ' <small>°C</small>';
+}
+
+function trataTemps(s) {
+  if (!s) return;
+  const p = s.split(';'), t = Date.now();
+  mostraTemp('t1', p[0]); mostraTemp('t2', p[1]); mostraTemp('t3', p[2]);
+  serT.forEach((se, i) => empurra(se, t, numero(p[i])));
+  ultimoDado = t; redesenha();
+}
+
+function trataElet(s) {
+  if (!s) return;
+  const p = s.split(';'), t = Date.now();
+  const n = $('nivel');
+  n.className = 'val' + (p[0] === '1' ? '' : ' warn');
+  n.textContent = p[0] === '1' ? 'OK' : 'Sem nível';
+  $('tensao').innerHTML = parseFloat(p[1]).toFixed(2) + ' <small>V</small>';
+  $('corr').innerHTML = parseFloat(p[2]).toFixed(1) + ' <small>A</small>';
+  empurra(serV, t, numero(p[1])); empurra(serI, t, numero(p[2]));
+  ultimoDado = t; redesenha();
+}
+
+// Funções fixas: o navegador ignora o addEventListener repetido com a mesma função
+const onTemps = e => trataTemps(dec.decode(e.target.value));
+const onElet  = e => trataElet(dec.decode(e.target.value));
+
+// ---------------------------------------------------------------- Intervalo de leitura
+function aplicaPeriodo(n) {
+  if (!(n >= 1 && n <= 30)) return;
+  periodoS = n; $('per').value = n; $('perLbl').textContent = n + ' s';
+}
+function semConfig() { chCfg = null; $('per').disabled = true; }
+
+$('per').addEventListener('input', e => { $('perLbl').textContent = e.target.value + ' s'; });
+$('per').addEventListener('change', async e => {
+  if (!chCfg) return;
+  try {
+    const d = enc.encode(String(parseInt(e.target.value)));
+    await (chCfg.writeValueWithResponse ? chCfg.writeValueWithResponse(d) : chCfg.writeValue(d));
+    aplicaPeriodo(parseInt(dec.decode(await chCfg.readValue())));
+  } catch (err) { status('Falha ao ajustar intervalo: ' + err.message, 'err'); }
+});
+
+// ---------------------------------------------------------------- Conexão
+function erroFatal(msg) { const e = new Error(msg); e.fatal = true; return e; }
+
+async function ligar() {
+  const dev = device;
+  if (!dev) return;
+  status('Conectando...');
+  const server = await dev.gatt.connect();
+  if (device !== dev) {                       // o usuário parou durante a conexão
+    try { dev.gatt.disconnect(); } catch (_) {}
+    const c = new Error('cancelado'); c.cancelado = true; throw c;
+  }
+  const svc = await server.getPrimaryService(SVC);
+
+  // 1) PIN: escreve e confere a resposta antes de assinar os dados
+  const auth = await svc.getCharacteristic(CHA);
+  const pin = $('pin').value.trim();
+  const dados = enc.encode(pin);
+  await (auth.writeValueWithResponse ? auth.writeValueWithResponse(dados) : auth.writeValue(dados));
+  const r = dec.decode(await auth.readValue());
+  if (r !== 'OK') {
+    throw erroFatal(r === 'BLOQ' ? 'Muitas tentativas. Aguarde 30 s.' : 'PIN incorreto.');
+  }
+  gravaSalvo('pin', pin);
+  if (dev.name) { gravaSalvo('nome', dev.name); mostraEq(); }
+
+  // 2) Intervalo atual do ESP32
+  chCfg = await svc.getCharacteristic(CHC);
+  try { aplicaPeriodo(parseInt(dec.decode(await chCfg.readValue()))); } catch (_) {}
+  $('per').disabled = false;
+
+  // 3) Dados
+  for (const [uuid, fn, ouve] of [[CHT, trataTemps, onTemps], [CHE, trataElet, onElet]]) {
+    const ch = await svc.getCharacteristic(uuid);
+    ch.addEventListener('characteristicvaluechanged', ouve);
+    await ch.startNotifications();
+    try { fn(dec.decode(await ch.readValue())); } catch (_) {}
+  }
+  status('Conectado a ' + (dev.name || 'ESP32'), 'ok');
+  $('btn').textContent = 'Desconectar';
+}
+
+// Reconexão sem limite: tenta até conectar ou o usuário tocar em "Parar"
+async function reconectar() {
+  if (!device) return;
+  const g = ++geracao;                         // invalida qualquer laço anterior
+  $('btn').textContent = 'Parar';
+  for (let i = 1; device && g === geracao; i++) {
+    status('Reconectando... tentativa ' + i, 'err');
+    try { await ligar(); return; }
+    catch (e) {
+      if (e.cancelado) return;
+      if (e.fatal) { desconectar(); status(e.message, 'err'); return; }
+      await new Promise(r => setTimeout(r, Math.min(5000, 1000 + i * 500)));
+    }
+  }
+}
+
+const onDesconectou = () => { semConfig(); if (device) reconectar(); };
+function ligaEventos(d) { d.addEventListener('gattserverdisconnected', onDesconectou); }
+
+async function conectar() {
+  if (!navigator.bluetooth) {
+    status('Web Bluetooth não suportado. Use o Chrome no Android ou no desktop.', 'err');
+    return;
+  }
+  if (!$('pin').value.trim()) { status('Digite o PIN do equipamento.', 'err'); return; }
+  geracao++;
+  const nome = lerSalvo('nome');
+  try {
+    // Com equipamento salvo, a lista mostra só ele (nome exato)
+    const filtro = nome ? { name: nome, services: [SVC] } : { services: [SVC] };
+    const d = await navigator.bluetooth.requestDevice({ filters: [filtro] });
+    device = d; ligaEventos(d);
+    await ligar();
+  } catch (e) {
+    if (e.fatal) { desconectar(); status(e.message, 'err'); }
+    else if (!device) {
+      status(e.name === 'NotFoundError'
+        ? (nome ? nome + ' não encontrado. Ligue o ESP32 e tente de novo, ou use "Trocar equipamento".'
+                : 'Nenhum equipamento selecionado.')
+        : 'Falha: ' + e.message, 'err');
+    }
+    else reconectar();
+  }
+}
+
+function desconectar() {
+  geracao++;                                    // encerra o laço de reconexão
+  const d = device; device = null;
+  semConfig();
+  if (d && d.gatt.connected) d.gatt.disconnect();
+  status('Desconectado');
+  $('btn').textContent = 'Conectar';
+}
+
+$('btn').addEventListener('click', () => device ? desconectar() : conectar());
+
+$('trocar').addEventListener('click', () => {
+  if (device) desconectar();
+  gravaSalvo('nome', ''); mostraEq();
+  status('Equipamento esquecido. Toque em Conectar e escolha outro.');
+});
+
+// Ao abrir: se o Chrome permitir, reconecta sozinho ao equipamento salvo
+async function autoAoAbrir() {
+  const nome = lerSalvo('nome');
+  if (!nome || !$('pin').value.trim()) return;
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  try {
+    const lista = await navigator.bluetooth.getDevices();
+    const d = lista.find(x => x.name === nome);
+    if (!d || device) return;
+    device = d; ligaEventos(d);
+    reconectar();
+  } catch (_) {}
+}
+autoAoAbrir();
+
+// Esmaece os valores se ficarem muito tempo sem atualização (depende do intervalo)
+setInterval(() => {
+  const limite = Math.max(5000, periodoS * 2000 + 3000);
+  const velho = device && device.gatt.connected && Date.now() - ultimoDado > limite;
+  $('grid').classList.toggle('stale', !!velho || !(device && device.gatt.connected));
+}, 1000);
+
+redesenha();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
