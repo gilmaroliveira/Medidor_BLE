@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Medidor BLE</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --txt:#e2e8f0; --mut:#94a3b8; --ok:#34d399; --warn:#fbbf24; --err:#f87171; --acc:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family: system-ui, sans-serif;
+         padding: max(16px, env(safe-area-inset-top)) 16px 24px; max-width:720px; margin-inline:auto; }
+  h1 { font-size: 1.15rem; margin: 0 0 4px; }
+  h2 { font-size: .95rem; margin: 20px 0 8px; color:var(--mut); font-weight:600; }
+  #status { color: var(--mut); font-size: .9rem; margin-bottom: 8px; }
+  #status.ok { color: var(--ok); } #status.err { color: var(--err); }
+  #eq { margin-bottom: 12px; }
+  #pin { width:100%; padding:14px; font-size:1rem; border:1px solid #334155; border-radius:12px;
+         background:var(--card); color:var(--txt); margin-bottom:10px; }
+  button { width:100%; padding:14px; font-size:1rem; border:0; border-radius:12px;
+           background:var(--acc); color:#06222f; font-weight:600; margin-bottom:16px; }
+  button.sec { background:#334155; color:var(--txt); margin-top:12px; margin-bottom:0; padding:10px; font-size:.9rem; }
+  button.lnk { width:auto; background:none; color:var(--acc); padding:0; margin:0; font-size:inherit;
+               text-decoration:underline; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  .card { background:var(--card); border-radius:14px; padding:14px; }
+  .card.larga { grid-column: 1 / -1; }
+  .lbl { color:var(--mut); font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; }
+  .val { font-size:2rem; font-weight:700; margin-top:4px; font-variant-numeric: tabular-nums; }
+  .val.med { font-size:1.4rem; }
+  .val small { font-size:1rem; color:var(--mut); font-weight:500; }
+  .val.warn { color:var(--warn); } .val.err { color:var(--err); } .val.ok { color:var(--ok); }
+  .sub { font-size:.8rem; color:var(--mut); min-height:1.1em; }
+  .stale .val { opacity:.35; }
+  .tag { font-size:.72rem; font-weight:700; margin-top:4px; min-height:1.1em; color:#fff; }
+  #per { width:100%; margin:12px 0 2px; accent-color:var(--acc); }
+  #per:disabled { opacity:.4; }
+  .hint { color:var(--mut); font-size:.8rem; }
+  canvas { width:100%; height:200px; display:block; margin-top:8px; }
+  .legenda { display:flex; gap:14px; flex-wrap:wrap; font-size:.8rem; color:var(--mut); margin-top:6px; }
+  .legenda span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:50%;
+                          background:var(--c); margin-right:6px; vertical-align:middle; }
+
+  /* ---- Alarmes ---- */
+  @keyframes piscaCrit { 50% { background:#ef4444; } }
+  @keyframes piscaWarn { 50% { background:#f59e0b; } }
+  @keyframes piscaRtn  { 50% { background:#065f46; } }
+  .card.al-crit-un  { background:#991b1b; animation: piscaCrit .6s infinite; }
+  .card.al-warn-un  { background:#92400e; animation: piscaWarn 1.2s infinite; }
+  .card.al-crit-ack { background:#991b1b; }
+  .card.al-warn-ack { background:#92400e; }
+  .card.al-rtn      { outline:2px solid var(--ok); animation: piscaRtn 2.4s infinite; }
+  .banner { border-radius:14px; padding:12px 14px; margin-bottom:12px; font-weight:600; font-size:.95rem; line-height:1.5; }
+  .banner.crit { background:#991b1b; } .banner.warn { background:#92400e; } .banner.ret { background:#065f46; }
+  .banner.crit.pisca { animation: piscaCrit .6s infinite; }
+  .banner.warn.pisca { animation: piscaWarn 1.2s infinite; }
+  .banner.ret.pisca-lento { animation: piscaRtn 2.4s infinite; }
+  #btnAck { background:#fff; color:#7f1d1d; margin:10px 0 0; font-size:1.1rem; }
+  .semcom { background:#78350f; color:#fde68a; border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:.85rem; }
+  details.card { margin-top:12px; }
+  details summary { cursor:pointer; font-weight:600; }
+  .chk { display:flex; gap:8px; align-items:center; font-size:.9rem; margin:10px 0 0; }
+  .chk input { width:auto; accent-color:var(--acc); }
+  .almgrid { display:grid; grid-template-columns:112px repeat(3, 1fr); gap:6px; align-items:center; margin-top:8px; }
+  .almgrid.cab { color:var(--mut); font-size:.75rem; text-align:center; margin-top:14px; }
+  .almgrid .chk { margin:0; }
+  .almgrid input[type=number], .duas input[type=number] {
+    width:100%; padding:9px 4px; font-size:.95rem; border-radius:8px; border:1px solid #334155;
+    background:var(--bg); color:var(--txt); text-align:center; }
+  .duas { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+  .duas label { font-size:.8rem; color:var(--mut); display:block; margin-bottom:4px; }
+  #almMsg { color:var(--warn); font-size:.8rem; min-height:1.2em; margin-top:8px; }
+  .log { margin:10px 0 0; padding-left:18px; font-size:.8rem; color:var(--txt); max-height:260px; overflow:auto; }
+  .log li span { color:var(--mut); }
+</style>
+</head>
+<body>
+<h1>Medidor BLE</h1>
+<div id="status">Desconectado</div>
+<div id="eq" class="hint" hidden>Equipamento: <b id="eqNome"></b> · <button class="lnk" id="trocar">Trocar equipamento</button></div>
+<input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN do equipamento">
+<button id="btn">Conectar</button>
+
+<div id="semCom" class="semcom" hidden>Alarmes inativos: sem conexão com o ESP32.</div>
+<div id="banner" class="banner" hidden>
+  <div id="bannerTxt"></div>
+  <button id="btnAck">RECONHECER ALARME</button>
+</div>
+
+<div class="grid" id="grid">
+  <div class="card" id="c_t1"><div class="lbl">Temp 1</div><div class="val" id="t1">--</div><div class="tag" id="tg_t1"></div></div>
+  <div class="card" id="c_t2"><div class="lbl">Temp 2</div><div class="val" id="t2">--</div><div class="tag" id="tg_t2"></div></div>
+  <div class="card" id="c_t3"><div class="lbl">Temp 3</div><div class="val" id="t3">--</div><div class="tag" id="tg_t3"></div></div>
+  <div class="card" id="c_n"><div class="lbl">Nível</div><div class="val" id="nivel">--</div><div class="sub" id="nivelSub"></div><div class="tag" id="tg_n"></div></div>
+  <div class="card" id="c_v"><div class="lbl">Tensão</div><div class="val" id="tensao">--</div><div class="tag" id="tg_v"></div></div>
+  <div class="card" id="c_i"><div class="lbl">Corrente</div><div class="val" id="corr">--</div><div class="sub" id="corrSub"></div><div class="tag" id="tg_i"></div></div>
+  <div class="card larga" id="c_e"><div class="lbl">ESP32</div><div class="val med" id="esp">--</div><div class="tag" id="tg_e"></div></div>
+</div>
+
+<details class="card" id="almBox">
+  <summary>Alarmes</summary>
+  <label class="chk"><input type="checkbox" id="aOn"> Alarmes ativados (temperaturas, tensão, corrente e nível)</label>
+  <label class="chk"><input type="checkbox" id="aSom" checked> Som e vibração</label>
+
+  <div class="almgrid cab"><span></span><span>Baixo</span><span>Alto</span><span>Histerese</span></div>
+  <div id="almRows"></div>
+  <div class="hint" style="margin-top:8px">Deixe em branco o limite que não quiser usar. A corrente é positiva na carga da bateria e negativa na descarga (ex.: Baixo = -50 A, Alto = 60 A). Marque só os canais com sensor ligado.</div>
+
+  <label class="chk"><input type="checkbox" id="aN"> Nível: alarme quando estiver BAIXO</label>
+  <label class="chk"><input type="checkbox" id="aCom" checked> ESP32: alarme de perda de comunicação</label>
+
+  <div class="duas">
+    <div><label for="aAtr">Atraso do alarme (s)</label><input type="number" inputmode="decimal" step="1" min="0" max="60" id="aAtr"></div>
+  </div>
+  <div id="almMsg"></div>
+  <div class="hint">Toque no card em alarme para reconhecer só aquele canal. O botão vermelho reconhece todos.</div>
+  <button class="sec" id="testar">Testar sons</button>
+</details>
+
+<h2>Gráficos em tempo real</h2>
+<div class="card">
+  <div class="lbl">Base de tempo do gráfico: <b id="perLbl">1 s</b> por ponto</div>
+  <input id="per" type="range" min="1" max="60" step="1" value="1">
+  <div class="hint">Muda só o intervalo entre os pontos plotados (1 a 60 s). O ESP32 lê e envia tudo a cada 0,5 s, e os valores e os alarmes não são afetados.</div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <div class="lbl">Temperaturas (°C)</div>
+  <canvas id="cvT"></canvas>
+  <div class="legenda">
+    <span style="--c:#38bdf8">T1</span><span style="--c:#fbbf24">T2</span><span style="--c:#f472b6">T3</span>
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px">
+  <div class="lbl">Tensão (V, esquerda) e corrente (A, direita)</div>
+  <canvas id="cvE"></canvas>
+  <div class="legenda">
+    <span style="--c:#34d399">Tensão</span><span style="--c:#f87171">Corrente</span>
+  </div>
+  <button class="sec" id="limpar">Limpar gráficos</button>
+</div>
+
+<details class="card">
+  <summary>Histórico de alarmes</summary>
+  <ol class="log" id="logAlm"></ol>
+  <button class="sec" id="limpaLog">Limpar histórico</button>
+</details>
+
+<script>
+const SVC = '7a1c0001-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHT = '7a1c0002-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHE = '7a1c0003-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const CHA = '7a1c0004-5b3e-4f2a-9c11-0d2e8a4b6c01';
+const TEMP_ALERTA = 80;          // °C: valor fica amarelo acima disso
+const MAX_PTS = 300;             // pontos guardados por série
+
+const $ = id => document.getElementById(id);
+const dec = new TextDecoder();
+const enc = new TextEncoder();
+let device = null, ultimoDado = 0, geracao = 0, jaConectou = false;
+let plotS = 1, ultimoPlot = 0;                       // base de tempo do gráfico (s)
+const ult = { t1:NaN, t2:NaN, t3:NaN, v:NaN, i:NaN, tT:0, tE:0 };   // últimos valores recebidos
+
+function lerSalvo(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } }
+function gravaSalvo(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (_) {} }
+
+$('pin').value = lerSalvo('pin');
+
+function status(txt, cls='') { const s = $('status'); s.textContent = txt; s.className = cls; }
+
+function mostraEq() {
+  const n = lerSalvo('nome');
+  $('eq').hidden = !n;
+  $('eqNome').textContent = n;
+}
+mostraEq();
+
+// ---------------------------------------------------------------- Dados / gráficos
+const serT = [
+  { cor:'#38bdf8', dados:[] }, { cor:'#fbbf24', dados:[] }, { cor:'#f472b6', dados:[] }
+];
+const serV = { cor:'#34d399', dados:[] };
+const serI = { cor:'#f87171', dados:[] };
+
+function empurra(serie, t, v) {
+  serie.dados.push({ t, v });
+  if (serie.dados.length > MAX_PTS) serie.dados.shift();
+}
+
+function numero(txt) { const v = parseFloat(txt); return isNaN(v) ? NaN : v; }
+
+function passoBonito(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+}
+
+// Escala automática: devolve {lo, hi, passo}
+function escala(series, spanMin) {
+  let mn = Infinity, mx = -Infinity;
+  for (const s of series) for (const p of s.dados) if (!isNaN(p.v)) { mn = Math.min(mn, p.v); mx = Math.max(mx, p.v); }
+  if (!isFinite(mn)) { mn = 0; mx = spanMin; }
+  let lo = mn, hi = mx;
+  if (hi - lo < spanMin) {
+    const c = (hi + lo) / 2;
+    lo = c - spanMin / 2; hi = c + spanMin / 2;
+    if (mn >= 0 && lo < 0) { hi -= lo; lo = 0; }
+  }
+  const passo = passoBonito((hi - lo) / 4);
+  lo = Math.floor(lo / passo) * passo;
+  hi = Math.ceil(hi / passo) * passo;
+  if (mn >= 0 && lo < 0) lo = 0;
+  return { lo, hi, passo };
+}
+
+const pad2 = n => String(n).padStart(2, '0');
+function fmtHM(t) { const d = new Date(t); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+
+// Marcas do eixo do tempo alinhadas ao relógio local (passos de minutos)
+function ticksTempo(t0, t1, maxN) {
+  const passos = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440].map(m => m * 60000);
+  const span = t1 - t0;
+  let passo = passos[passos.length - 1];
+  for (const p of passos) if (span / p <= maxN) { passo = p; break; }
+  const off = new Date(t0).getTimezoneOffset() * 60000;
+  const out = [];
+  for (let t = Math.ceil((t0 - off) / passo) * passo + off; t <= t1; t += passo) out.push(t);
+  return out;
+}
+
+function desenha(canvas, esq, dir, spanEsq, spanDir) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  }
+  const g = canvas.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+
+  const padL = 40, padR = dir.length ? 40 : 10, padT = 8, padB = 22;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  g.font = '11px system-ui, sans-serif';
+
+  const todas = esq.concat(dir);
+  let t0 = Infinity, t1 = -Infinity;
+  for (const s of todas) for (const p of s.dados) { t0 = Math.min(t0, p.t); t1 = Math.max(t1, p.t); }
+  if (!isFinite(t0)) {
+    g.fillStyle = '#94a3b8'; g.textAlign = 'center';
+    g.fillText('Sem dados', w / 2, h / 2);
+    return;
+  }
+  if (t1 - t0 < 2000) t1 = t0 + 2000;
+
+  const eE = escala(esq, spanEsq);
+  const eD = dir.length ? escala(dir, spanDir) : null;
+  const X = t => padL + (t - t0) / (t1 - t0) * pw;
+  const Y = (v, e) => padT + (1 - (v - e.lo) / (e.hi - e.lo)) * ph;
+
+  // grade + rótulos do eixo esquerdo
+  g.lineWidth = 1; g.strokeStyle = '#334155'; g.fillStyle = '#94a3b8';
+  g.textAlign = 'right';
+  for (let v = eE.lo; v <= eE.hi + 1e-9; v += eE.passo) {
+    const y = Y(v, eE);
+    g.beginPath(); g.moveTo(padL, y); g.lineTo(w - padR, y); g.stroke();
+    g.fillStyle = esq.length === 1 ? esq[0].cor : '#94a3b8';
+    g.fillText(+v.toFixed(2), padL - 5, y + 4);
+  }
+  if (eD) {
+    g.textAlign = 'left'; g.fillStyle = dir[0].cor;
+    for (let v = eD.lo; v <= eD.hi + 1e-9; v += eD.passo) {
+      g.fillText(+v.toFixed(2), w - padR + 5, Y(v, eD) + 4);
+    }
+    // linha do zero da corrente (separa carga de descarga)
+    if (eD.lo < 0 && eD.hi > 0) {
+      g.strokeStyle = dir[0].cor; g.globalAlpha = 0.45; g.setLineDash([4, 4]);
+      g.beginPath(); g.moveTo(padL, Y(0, eD)); g.lineTo(w - padR, Y(0, eD)); g.stroke();
+      g.setLineDash([]); g.globalAlpha = 1;
+    }
+  }
+  // eixo do tempo: marcas hh:mm alinhadas ao relógio
+  g.fillStyle = '#94a3b8'; g.strokeStyle = '#334155'; g.lineWidth = 1;
+  let marcas = ticksTempo(t0, t1, Math.max(2, Math.floor(pw / 55)));
+  if (marcas.length < 2) marcas = [t0, t1];
+  marcas.forEach(tm => {
+    const x = X(tm);
+    g.beginPath(); g.moveTo(x, padT + ph); g.lineTo(x, padT + ph + 4); g.stroke();
+    g.textAlign = x - 17 < 0 ? 'left' : (x + 17 > w ? 'right' : 'center');
+    g.fillText(fmtHM(tm), x, h - 6);
+  });
+
+  // linhas (valores inválidos abrem uma lacuna)
+  const traca = (s, e) => {
+    g.strokeStyle = s.cor; g.lineWidth = 2; g.lineJoin = 'round';
+    g.beginPath();
+    let aberto = false;
+    for (const p of s.dados) {
+      if (isNaN(p.v)) { aberto = false; continue; }
+      const x = X(p.t), y = Y(p.v, e);
+      if (!aberto) { g.moveTo(x, y); aberto = true; } else g.lineTo(x, y);
+    }
+    g.stroke();
+    const u = s.dados[s.dados.length - 1];
+    if (u && !isNaN(u.v)) { g.fillStyle = s.cor; g.beginPath(); g.arc(X(u.t), Y(u.v, e), 3, 0, 7); g.fill(); }
+  };
+  esq.forEach(s => traca(s, eE));
+  if (eD) dir.forEach(s => traca(s, eD));
+}
+
+let desenhoAgendado = false;
+function redesenha() {
+  if (desenhoAgendado) return;
+  desenhoAgendado = true;
+  requestAnimationFrame(() => {
+    desenhoAgendado = false;
+    desenha($('cvT'), serT, [], 10, 0);
+    desenha($('cvE'), [serV], [serI], 1, 5);
+  });
+}
+window.addEventListener('resize', redesenha);
+
+$('limpar').addEventListener('click', () => {
+  serT.forEach(s => s.dados.length = 0); serV.dados.length = 0; serI.dados.length = 0;
+  redesenha();
+});
+
+// ---------------------------------------------------------------- Alarmes
+// Estados por canal (modelo ISA-18.2 com ringback, como na sequência R da ISA-18.1):
+//   NORMAL -> UNACK (alarme não reconhecido: pisca + som)
+//   UNACK  -> ACK   (reconhecido: luz fixa, sem som)  | UNACK -> RTN (voltou ao normal sem reconhecer)
+//   ACK    -> NORMAL (voltou ao normal)               | RTN  -> NORMAL (reconhecido)
+// Canais: t1 t2 t3 (°C) · v (V) · i (A, com sinal) · n (nível, só baixo) · e (comunicação com o ESP32)
+const K      = ['t1', 't2', 't3', 'v', 'i', 'n', 'e'];
+const CFGCH  = ['t1', 't2', 't3', 'v', 'i', 'n'];
+const NOM    = { t1:'T1', t2:'T2', t3:'T3', v:'Tensão', i:'Corrente', n:'Nível', e:'ESP32' };
+const UN     = { t1:'°C', t2:'°C', t3:'°C', v:'V', i:'A' };
+const HIST0  = { t1:1, t2:1, t3:1, v:0.2, i:1, n:0 };
+const SEV    = { H:1, L:1, FALHA:2, COM:3 };
+const TXTCOND = { H:'ALTO', L:'BAIXO', FALHA:'FALHA DE SENSOR', COM:'SEM COMUNICAÇÃO' };
+const ROT    = { UNACK:'NÃO RECONHECIDO', ACK:'RECONHECIDO' };
+
+const cfgPadrao = () => {
+  const c = { on:false, som:true, atraso:3, com:true, canais:{} };
+  CFGCH.forEach(k => c.canais[k] = { on:false, L:null, H:null, hist:HIST0[k] });
+  return c;
+};
+let cfg = cfgPadrao();
+function mescla(s) {
+  if (!s || typeof s !== 'object') return;
+  if ('on' in s) cfg.on = !!s.on;
+  if ('som' in s) cfg.som = !!s.som;
+  if ('com' in s) cfg.com = !!s.com;
+  if (typeof s.atraso === 'number') cfg.atraso = s.atraso;
+  CFGCH.forEach(k => { const c = s.canais && s.canais[k]; if (c) Object.assign(cfg.canais[k], c); });
+}
+try {
+  const novo = JSON.parse(lerSalvo('alm2') || 'null');
+  if (novo) mescla(novo);
+  else {                                      // migra a configuração da versão anterior (só L e H)
+    const o = JSON.parse(lerSalvo('alm') || 'null');
+    if (o && typeof o === 'object') {
+      cfg.on = !!o.on; cfg.som = o.som !== false;
+      if (typeof o.atraso === 'number') cfg.atraso = o.atraso;
+      [0, 1, 2].forEach(i => {
+        const c = cfg.canais['t' + (i + 1)], l = o.lim && o.lim[i];
+        c.on = !!(o.ch && o.ch[i]);
+        c.L = l && l.L != null ? l.L : null;
+        c.H = l && l.H != null ? l.H : null;
+        if (typeof o.hist === 'number') c.hist = o.hist;
+      });
+    }
+  }
+} catch (_) {}
+
+const est = {};
+K.forEach(k => est[k] = { cond:null, estado:'NORMAL', pend:undefined, pendT:0, v:NaN });
+
+let logAlm = [];
+try { logAlm = JSON.parse(lerSalvo('almlog') || '[]'); if (!Array.isArray(logAlm)) logAlm = []; } catch (_) { logAlm = []; }
+
+function fmtV(k, v) {
+  if (k === 'e') return '';
+  if (k === 'n') return v === 1 ? 'alto' : v === 0 ? 'baixo' : '--';
+  if (isNaN(v)) return '--';
+  return v.toFixed(k === 'v' ? 2 : 1) + ' ' + UN[k];
+}
+function parenV(k, v) { const s = fmtV(k, v); return s ? ' (' + s + ')' : ''; }
+function txtCond(k, cond) { return k === 'e' || k === 'n' ? TXTCOND[cond] : TXTCOND[cond]; }
+
+function fmtHora(t) {
+  const d = new Date(t);
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR');
+}
+function desenhaLog() {
+  $('logAlm').innerHTML = logAlm.slice(-30).reverse()
+    .map(x => '<li><span>' + fmtHora(x.t) + '</span> ' + x.txt + '</li>').join('');
+}
+function registra(k, txt) {
+  logAlm.push({ t: Date.now(), txt: NOM[k] + ' ' + txt });
+  if (logAlm.length > 100) logAlm.shift();
+  gravaSalvo('almlog', JSON.stringify(logAlm));
+  desenhaLog();
+}
+desenhaLog();
+
+// Condição bruta com histerese (banda morta) em relação à condição atual
+function brutoCond(v, L, H, hist, atual) {
+  if (H != null && (v >= H || (atual === 'H' && v >= H - hist))) return 'H';
+  if (L != null && (v <= L || (atual === 'L' && v <= L + hist))) return 'L';
+  return null;
+}
+
+function muda(k, nova, v) {
+  const e = est[k], ant = e.cond;
+  e.cond = nova;
+  if (nova === null) {
+    if (e.estado === 'UNACK') { e.estado = 'RTN'; registra(k, 'voltou ao normal sem reconhecimento' + parenV(k, v)); }
+    else if (e.estado === 'ACK') { e.estado = 'NORMAL'; registra(k, 'voltou ao normal' + parenV(k, v)); }
+  } else if (ant === null || SEV[nova] > SEV[ant]) {
+    e.estado = 'UNACK';
+    registra(k, txtCond(k, nova) + parenV(k, v));
+  } else {
+    registra(k, 'passou para ' + txtCond(k, nova) + parenV(k, v));
+  }
+}
+
+function resetaEstado(k) {
+  const e = est[k];
+  e.cond = null; e.estado = 'NORMAL'; e.pend = undefined;
+}
+
+// Aplica o atraso na entrada do alarme (o retorno ao normal é imediato)
+function avalia(k, bruto, v, t) {
+  const e = est[k];
+  e.v = v;
+  if (bruto === e.cond) {
+    e.pend = undefined;
+  } else if (bruto === null) {
+    e.pend = undefined;
+    muda(k, null, v);
+  } else {
+    if (e.pend !== bruto) { e.pend = bruto; e.pendT = t; }
+    if (t - e.pendT >= cfg.atraso * 1000) { e.pend = undefined; muda(k, bruto, v); }
+  }
+  renderAlarmes();
+}
+
+function alarmeCanal(k, v, t) {
+  const c = cfg.canais[k], e = est[k];
+  if (!cfg.on || !c.on) {
+    e.v = v;
+    if (e.cond !== null || e.estado !== 'NORMAL') resetaEstado(k);
+    renderAlarmes();
+    return;
+  }
+  let bruto;
+  if (k === 'n') {
+    if (isNaN(v)) return;
+    bruto = v === 0 ? 'L' : null;               // nível ALTO é o estado normal
+  } else if (isNaN(v)) {
+    bruto = k[0] === 't' ? 'FALHA' : e.cond;    // temperatura: ERR = falha; V e A: ignora leitura inválida
+  } else {
+    bruto = brutoCond(v, c.L, c.H, c.hist, e.cond);
+  }
+  avalia(k, bruto, v, t);
+}
+
+// Tempo sem dados que caracteriza perda de comunicação (o ESP32 envia a cada 0,5 s)
+function limiteSemDados() { return 15000; }
+
+// Alarme de comunicação com o ESP32: só depois de já ter conectado uma vez
+function alarmeCom(t) {
+  const e = est.e;
+  if (!cfg.com) {
+    if (e.cond !== null || e.estado !== 'NORMAL') resetaEstado('e');
+    renderAlarmes();
+    return;
+  }
+  const conectado = !!(device && device.gatt.connected);
+  const semDados = conectado && ultimoDado > 0 && (t - ultimoDado > limiteSemDados());
+  const perdida = jaConectou && !!device && (!conectado || semDados);
+  avalia('e', perdida ? 'COM' : null, NaN, t);
+}
+
+function reconhecer(k) {
+  const e = est[k];
+  if (e.estado === 'UNACK') { e.estado = 'ACK'; registra(k, 'reconhecido'); }
+  else if (e.estado === 'RTN') { e.estado = 'NORMAL'; registra(k, 'normal reconhecido'); }
+  renderAlarmes();
+}
+function reconhecerTodos() { K.forEach(reconhecer); }
+
+function linhaAlarme(k, rot) {
+  const e = est[k];
+  return NOM[k] + ' ' + txtCond(k, e.cond) + parenV(k, e.v) + ' — ' + rot;
+}
+
+function renderAlarmes() {
+  const CL = ['al-crit-un', 'al-warn-un', 'al-crit-ack', 'al-warn-ack', 'al-rtn'];
+  let unCrit = false, unWarn = false, rtn = false, ackCrit = false;
+  const linhas = [];
+  K.forEach(k => {
+    const e = est[k];
+    let cls = '', tag = '';
+    if (e.estado === 'UNACK') {
+      const crit = SEV[e.cond] >= 2;
+      cls = crit ? 'al-crit-un' : 'al-warn-un';
+      if (crit) unCrit = true; else unWarn = true;
+      tag = txtCond(k, e.cond) + ' · toque p/ reconhecer';
+      linhas.push(linhaAlarme(k, ROT.UNACK));
+    } else if (e.estado === 'ACK') {
+      const crit = SEV[e.cond] >= 2;
+      cls = crit ? 'al-crit-ack' : 'al-warn-ack';
+      if (crit) ackCrit = true;
+      tag = txtCond(k, e.cond) + ' · reconhecido';
+      linhas.push(linhaAlarme(k, ROT.ACK));
+    } else if (e.estado === 'RTN') {
+      cls = 'al-rtn'; rtn = true;
+      tag = 'voltou ao normal · toque p/ reconhecer';
+      linhas.push(NOM[k] + ' VOLTOU AO NORMAL' + parenV(k, e.v) + ' — reconhecer');
+    }
+    const card = $('c_' + k);
+    CL.forEach(c => card.classList.toggle(c, c === cls));
+    $('tg_' + k).textContent = tag;
+  });
+
+  const un = unCrit || unWarn;
+  const b = $('banner');
+  b.hidden = linhas.length === 0;
+  if (linhas.length) {
+    const semSom = cfg.som && (un || rtn) && !(audioCtx && audioCtx.state === 'running');
+    $('bannerTxt').innerHTML = linhas.join('<br>') + (semSom ? '<br>Toque na tela para liberar o som.' : '');
+    b.className = 'banner ' + (unCrit ? 'crit pisca' : unWarn ? 'warn pisca' : rtn ? 'ret pisca-lento' : (ackCrit ? 'crit' : 'warn'));
+    $('btnAck').hidden = !(un || rtn);
+  }
+}
+
+function atualizaSemCom() {
+  $('semCom').hidden = !(cfg.on && !(device && device.gatt.connected));
+}
+
+// Widget do ESP32
+function atualizaEsp() {
+  const el = $('esp');
+  const conectado = !!(device && device.gatt.connected);
+  let txt, cls;
+  if (conectado) {
+    const velho = ultimoDado > 0 && Date.now() - ultimoDado > limiteSemDados();
+    txt = velho ? 'SEM DADOS RECENTES' : 'Comunicando'; cls = velho ? 'err' : 'ok';
+  } else if (device) { txt = 'Reconectando...'; cls = 'err'; }
+  else { txt = 'Desconectado'; cls = ''; }
+  el.textContent = txt; el.className = 'val med ' + cls;
+}
+
+// ---- Som (Web Audio): padrões distintos
+let audioCtx = null, proxBip = 0, inicioPendente = true;
+const tInicio = Date.now();
+
+function bip(freq, dur, atraso, tipo) {
+  if (!audioCtx || audioCtx.state !== 'running') return false;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime + (atraso || 0);
+  o.type = tipo || 'square'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+  return true;
+}
+function vibra(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (_) {} }
+
+function somInicio() { bip(523, .15, 0, 'sine'); bip(659, .15, .17, 'sine'); bip(784, .35, .34, 'sine'); }   // 3 notas subindo
+function somCom()    { bip(740, .22, 0); bip(494, .40, .26); vibra([300, 100, 300]); }                       // 2 tons descendo
+
+function tentaInicio() {
+  if (inicioPendente && audioCtx && audioCtx.state === 'running') {
+    inicioPendente = false;
+    if (Date.now() - tInicio < 120000) somInicio();   // não toca um "bom dia" tardio
+  }
+}
+async function iniciaAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = audioCtx || new AC();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+  } catch (_) {}
+  tentaInicio();
+}
+// O navegador só libera o som depois de um toque; ao abrir, tenta tocar e, se bloqueado, toca no primeiro toque
+document.addEventListener('pointerdown', iniciaAudio);
+iniciaAudio();
+
+function modoSom() {
+  let m = null;
+  for (const k of K) {
+    const e = est[k];
+    if (e.estado === 'UNACK') {
+      if (e.cond === 'COM') return 'com';
+      if (SEV[e.cond] >= 2) m = 'crit'; else if (m !== 'crit') m = 'warn';
+    } else if (e.estado === 'RTN' && m === null) m = 'ret';
+  }
+  return m;
+}
+setInterval(() => {
+  const m = cfg.som ? modoSom() : null;
+  if (!m) return;
+  const agora = Date.now();
+  if (agora < proxBip) return;
+  if (m === 'com')       { somCom(); proxBip = agora + 2000; }                          // perda de comunicação
+  else if (m === 'crit') { bip(880, 0.18); vibra([150]); proxBip = agora + 400; }       // falha de sensor: bipe rápido
+  else if (m === 'warn') { bip(660, 0.30); proxBip = agora + 1000; }                    // alto/baixo: bipe lento
+  else                   { bip(440, 0.20); proxBip = agora + 3000; }                    // retorno ao normal: tom grave espaçado
+}, 100);
+
+// ---- Manter a tela ligada enquanto monitora (o som só toca com o app aberto)
+let wl = null;
+async function manterTela(on) {
+  try {
+    if (on && 'wakeLock' in navigator && !wl) {
+      wl = await navigator.wakeLock.request('screen');
+      wl.addEventListener('release', () => { wl = null; });
+    } else if (!on && wl) { await wl.release(); wl = null; }
+  } catch (_) {}
+}
+function querTela() { return cfg.on || cfg.com; }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && device && device.gatt.connected && querTela()) manterTela(true);
+});
+
+// ---- Configuração na tela
+(function montaTabela() {
+  let h = '';
+  [['t1', 'T1', '°C'], ['t2', 'T2', '°C'], ['t3', 'T3', '°C'], ['v', 'Tensão', 'V'], ['i', 'Corrente', 'A']].forEach(([k, n, u]) => {
+    h += '<div class="almgrid"><label class="chk"><input type="checkbox" id="a_' + k + '_on"> ' + n + ' (' + u + ')</label>' +
+      ['L', 'H', 'hist'].map(f => '<input type="number" inputmode="decimal" step="0.1" id="a_' + k + '_' + f +
+        '" aria-label="' + n + ' ' + f + '">').join('') + '</div>';
+  });
+  $('almRows').innerHTML = h;
+})();
+
+function num(s) { const v = parseFloat(String(s).replace(',', '.')); return isNaN(v) ? null : v; }
+const vis = v => (v === null || v === undefined) ? '' : v;
+
+function carregaUI() {
+  $('aOn').checked = !!cfg.on; $('aSom').checked = !!cfg.som;
+  $('aCom').checked = !!cfg.com; $('aN').checked = !!cfg.canais.n.on;
+  $('aAtr').value = cfg.atraso;
+  ['t1', 't2', 't3', 'v', 'i'].forEach(k => {
+    const c = cfg.canais[k];
+    $('a_' + k + '_on').checked = !!c.on;
+    $('a_' + k + '_L').value = vis(c.L); $('a_' + k + '_H').value = vis(c.H); $('a_' + k + '_hist').value = vis(c.hist);
+  });
+}
+
+function valida() {
+  let msg = '';
+  ['t1', 't2', 't3', 'v', 'i'].forEach(k => {
+    const c = cfg.canais[k];
+    if (c.L != null && c.H != null && c.L >= c.H) msg = NOM[k] + ': o limite Baixo precisa ser menor que o Alto.';
+  });
+  $('almMsg').textContent = msg;
+}
+
+function leUI() {
+  cfg.on = $('aOn').checked; cfg.som = $('aSom').checked; cfg.com = $('aCom').checked;
+  cfg.canais.n.on = $('aN').checked;
+  const a = num($('aAtr').value);
+  cfg.atraso = a === null ? 3 : Math.min(60, Math.max(0, a));
+  ['t1', 't2', 't3', 'v', 'i'].forEach(k => {
+    const c = cfg.canais[k], h = num($('a_' + k + '_hist').value);
+    c.on = $('a_' + k + '_on').checked;
+    c.L = num($('a_' + k + '_L').value); c.H = num($('a_' + k + '_H').value);
+    c.hist = h === null ? HIST0[k] : Math.max(0, h);
+  });
+  gravaSalvo('alm2', JSON.stringify(cfg));
+  CFGCH.forEach(k => { if (!cfg.on || !cfg.canais[k].on) resetaEstado(k); });
+  if (!cfg.com) resetaEstado('e');
+  if (device && device.gatt.connected) manterTela(querTela());
+  valida(); atualizaSemCom(); renderAlarmes();
+}
+
+$('almBox').addEventListener('change', leUI);
+carregaUI(); valida(); atualizaSemCom(); renderAlarmes(); atualizaEsp();
+
+$('btnAck').addEventListener('click', reconhecerTodos);
+K.forEach(k => $('c_' + k).addEventListener('click', () => reconhecer(k)));
+$('limpaLog').addEventListener('click', () => { logAlm = []; gravaSalvo('almlog', ''); desenhaLog(); });
+$('testar').addEventListener('click', async () => {
+  await iniciaAudio();
+  $('almMsg').textContent = 'Teste: falha de sensor, alto/baixo, voltou ao normal, perda de comunicação e abertura do app.';
+  const T = (ms, fn) => setTimeout(fn, ms);
+  T(0, () => bip(880, .18)); T(400, () => bip(880, .18)); T(800, () => bip(880, .18));
+  T(1600, () => bip(660, .30));
+  T(2800, () => bip(440, .20));
+  T(4000, somCom);
+  T(5400, somInicio);
+  vibra([200, 100, 200]);
+  T(7000, valida);
+});
+
+// ---------------------------------------------------------------- Valores atuais
+function mostraTemp(id, txt) {
+  const el = $(id);
+  if (txt === 'ERR' || txt === undefined || txt === '') {
+    el.className = 'val err'; el.textContent = 'ERR'; return;
+  }
+  const v = parseFloat(txt);
+  el.className = 'val' + (v >= TEMP_ALERTA ? ' warn' : '');
+  el.innerHTML = v.toFixed(1) + ' <small>°C</small>';
+}
+
+function trataTemps(s) {
+  if (!s) return;
+  const p = s.split(';'), t = Date.now();
+  mostraTemp('t1', p[0]); mostraTemp('t2', p[1]); mostraTemp('t3', p[2]);
+  for (let i = 0; i < 3; i++) ult['t' + (i + 1)] = numero(p[i]);
+  ult.tT = t; ultimoDado = t;
+  for (let i = 0; i < 3; i++) if (p[i] !== undefined) alarmeCanal('t' + (i + 1), numero(p[i]), t);
+  alarmeCom(t); atualizaEsp();
+}
+
+function trataElet(s) {
+  if (!s) return;
+  const p = s.split(';'), t = Date.now();
+  const niv = p[0] === '1' ? 1 : p[0] === '0' ? 0 : NaN;
+  const vv = numero(p[1]), ii = numero(p[2]);
+
+  const n = $('nivel');
+  n.className = 'val' + (niv === 1 ? ' ok' : niv === 0 ? ' err' : '');
+  n.textContent = niv === 1 ? 'ALTO' : niv === 0 ? 'BAIXO' : '--';
+  $('nivelSub').textContent = niv === 1 ? 'Normal' : niv === 0 ? 'Abaixo do normal' : '';
+
+  $('tensao').innerHTML = isNaN(vv) ? '--' : vv.toFixed(2) + ' <small>V</small>';
+  if (isNaN(ii)) { $('corr').innerHTML = '--'; $('corrSub').textContent = ''; }
+  else {
+    $('corr').innerHTML = (ii > 0 ? '+' : '') + ii.toFixed(1) + ' <small>A</small>';
+    $('corrSub').textContent = ii > 0.05 ? 'Carga (bateria)' : ii < -0.05 ? 'Descarga (bateria)' : 'Sem corrente';
+  }
+
+  ult.v = vv; ult.i = ii; ult.tE = t; ultimoDado = t;
+  alarmeCanal('n', niv, t); alarmeCanal('v', vv, t); alarmeCanal('i', ii, t);
+  alarmeCom(t); atualizaEsp();
+}
+
+// Funções fixas: o navegador ignora o addEventListener repetido com a mesma função
+const onTemps = e => trataTemps(dec.decode(e.target.value));
+const onElet  = e => trataElet(dec.decode(e.target.value));
+
+// ---------------------------------------------------------------- Base de tempo do gráfico
+// O ESP32 mede e envia a cada 0,5 s. Os valores na tela e os alarmes usam todas as leituras;
+// o gráfico recebe só um ponto a cada "plotS" segundos (o último valor recebido).
+function aplicaPlot(n) {
+  if (!(n >= 1 && n <= 60)) n = 1;
+  plotS = n; $('per').value = n; $('perLbl').textContent = n + ' s';
+}
+aplicaPlot(parseInt(lerSalvo('plotS')));
+$('per').addEventListener('input', e => { aplicaPlot(parseInt(e.target.value)); gravaSalvo('plotS', String(plotS)); });
+
+function plotaTick() {
+  if (!(device && device.gatt.connected)) return;
+  if (!(ult.tT > 0 && ult.tE > 0)) return;                 // espera os dois pacotes chegarem
+  const agora = Date.now();
+  if (agora - ultimoPlot < plotS * 1000) return;
+  ultimoPlot = agora;
+  const velho = agora - Math.min(ult.tT, ult.tE) > limiteSemDados();   // sem dados: abre lacuna
+  const v = k => velho ? NaN : ult[k];
+  empurra(serT[0], agora, v('t1')); empurra(serT[1], agora, v('t2')); empurra(serT[2], agora, v('t3'));
+  empurra(serV, agora, v('v')); empurra(serI, agora, v('i'));
+  redesenha();
+}
+setInterval(plotaTick, 250);
+
+// ---------------------------------------------------------------- Conexão
+function erroFatal(msg) { const e = new Error(msg); e.fatal = true; return e; }
+
+async function ligar() {
+  const dev = device;
+  if (!dev) return;
+  status('Conectando...');
+  const server = await dev.gatt.connect();
+  if (device !== dev) {                       // o usuário parou durante a conexão
+    try { dev.gatt.disconnect(); } catch (_) {}
+    const c = new Error('cancelado'); c.cancelado = true; throw c;
+  }
+  const svc = await server.getPrimaryService(SVC);
+
+  // 1) PIN: escreve e confere a resposta antes de assinar os dados
+  const auth = await svc.getCharacteristic(CHA);
+  const pin = $('pin').value.trim();
+  const dados = enc.encode(pin);
+  await (auth.writeValueWithResponse ? auth.writeValueWithResponse(dados) : auth.writeValue(dados));
+  const r = dec.decode(await auth.readValue());
+  if (r !== 'OK') {
+    throw erroFatal(r === 'BLOQ' ? 'Muitas tentativas. Aguarde 30 s.' : 'PIN incorreto.');
+  }
+  gravaSalvo('pin', pin);
+  if (dev.name) { gravaSalvo('nome', dev.name); mostraEq(); }
+
+  // 2) Dados
+  for (const [uuid, fn, ouve] of [[CHT, trataTemps, onTemps], [CHE, trataElet, onElet]]) {
+    const ch = await svc.getCharacteristic(uuid);
+    ch.addEventListener('characteristicvaluechanged', ouve);
+    await ch.startNotifications();
+    try { fn(dec.decode(await ch.readValue())); } catch (_) {}
+  }
+  jaConectou = true;
+  ultimoDado = Date.now();
+  status('Conectado a ' + (dev.name || 'ESP32'), 'ok');
+  $('btn').textContent = 'Desconectar';
+  manterTela(querTela());
+  atualizaSemCom(); alarmeCom(Date.now()); atualizaEsp();
+}
+
+// Reconexão sem limite: tenta até conectar ou o usuário tocar em "Parar"
+async function reconectar() {
+  if (!device) return;
+  const g = ++geracao;                         // invalida qualquer laço anterior
+  $('btn').textContent = 'Parar';
+  atualizaSemCom(); atualizaEsp();
+  for (let i = 1; device && g === geracao; i++) {
+    status('Reconectando... tentativa ' + i, 'err');
+    try { await ligar(); return; }
+    catch (e) {
+      if (e.cancelado) return;
+      if (e.fatal) { desconectar(); status(e.message, 'err'); return; }
+      await new Promise(r => setTimeout(r, Math.min(5000, 1000 + i * 500)));
+    }
+  }
+}
+
+const onDesconectou = () => {
+  atualizaSemCom(); atualizaEsp(); alarmeCom(Date.now());
+  if (device) reconectar();
+};
+function ligaEventos(d) { d.addEventListener('gattserverdisconnected', onDesconectou); }
+
+async function conectar() {
+  iniciaAudio();
+  if (!navigator.bluetooth) {
+    status('Web Bluetooth não suportado. Use o Chrome no Android ou no desktop.', 'err');
+    return;
+  }
+  if (!$('pin').value.trim()) { status('Digite o PIN do equipamento.', 'err'); return; }
+  geracao++;
+  const nome = lerSalvo('nome');
+  try {
+    // Com equipamento salvo, a lista mostra só ele (nome exato)
+    const filtro = nome ? { name: nome, services: [SVC] } : { services: [SVC] };
+    const d = await navigator.bluetooth.requestDevice({ filters: [filtro] });
+    device = d; ligaEventos(d);
+    await ligar();
+  } catch (e) {
+    if (e.fatal) { desconectar(); status(e.message, 'err'); }
+    else if (!device) {
+      status(e.name === 'NotFoundError'
+        ? (nome ? nome + ' não encontrado. Ligue o ESP32 e tente de novo, ou use "Trocar equipamento".'
+                : 'Nenhum equipamento selecionado.')
+        : 'Falha: ' + e.message, 'err');
+    }
+    else reconectar();
+  }
+}
+
+function desconectar() {
+  geracao++;                                    // encerra o laço de reconexão
+  const d = device; device = null;
+  jaConectou = false;                           // desconexão pedida pelo usuário não é alarme
+  resetaEstado('e');
+  manterTela(false);
+  if (d && d.gatt.connected) d.gatt.disconnect();
+  status('Desconectado');
+  $('btn').textContent = 'Conectar';
+  atualizaSemCom(); atualizaEsp(); renderAlarmes();
+}
+
+$('btn').addEventListener('click', () => device ? desconectar() : conectar());
+
+$('trocar').addEventListener('click', () => {
+  if (device) desconectar();
+  gravaSalvo('nome', ''); mostraEq();
+  status('Equipamento esquecido. Toque em Conectar e escolha outro.');
+});
+
+// Ao abrir: se o Chrome permitir, reconecta sozinho ao equipamento salvo
+async function autoAoAbrir() {
+  const nome = lerSalvo('nome');
+  if (!nome || !$('pin').value.trim()) return;
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  try {
+    const lista = await navigator.bluetooth.getDevices();
+    const d = lista.find(x => x.name === nome);
+    if (!d || device) return;
+    device = d; ligaEventos(d);
+    reconectar();
+  } catch (_) {}
+}
+autoAoAbrir();
+
+// Esmaece os valores se ficarem muito tempo sem atualização; reavalia a comunicação com o ESP32
+setInterval(() => {
+  const limite = 5000;
+  const velho = device && device.gatt.connected && Date.now() - ultimoDado > limite;
+  $('grid').classList.toggle('stale', !!velho || !(device && device.gatt.connected));
+  atualizaSemCom(); alarmeCom(Date.now()); atualizaEsp();
+}, 1000);
+
+redesenha();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
